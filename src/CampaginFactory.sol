@@ -9,7 +9,7 @@ import "./FundingCampaign.sol";
  * @notice Factory untuk create & track campaigns
  * @dev Only admin can create campaigns
  */
- // ini edit baru dehhh
+ // ini di edit lagi
 contract CampaignFactory is Ownable {
     
     // ═══════════════════════════════════════════════════════
