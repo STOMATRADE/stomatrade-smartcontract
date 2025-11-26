@@ -7,71 +7,27 @@ import "../src/MockIDRX.sol";
 
 contract DeployScript is Script {
     function run() external {
-        // Get private key dari environment variable
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
         
-        console.log("=== DEPLOYMENT START ===");
-        console.log("Deployer:", deployer);
-        console.log("Chain ID:", block.chainid);
-        
-        // Start broadcasting transactions
         vm.startBroadcast(deployerPrivateKey);
-        
-        // 1. Deploy MockIDRX dengan 10 juta supply
-        // Note: Jangan dikali decimals, constructor MockIDRX sudah handle
-        MockIDRX idrx = new MockIDRX(10_000_000);
-        console.log("\n[1/2] MockIDRX deployed at:", address(idrx));
-        console.log("      Total Supply:", idrx.totalSupply() / 10**18, "IDRX");
-        console.log("      Deployer Balance:", idrx.balanceOfIDRX(deployer), "IDRX");
-        
-        // 2. Deploy StomaTrade
-        StomaTrade stoma = new StomaTrade(address(idrx));
-        console.log("\n[2/2] StomaTrade deployed at:", address(stoma));
-        console.log("      IDRX Token:", address(idrx));
-        
-        // 3. Optional: Transfer ownership ke address lain
-        // stoma.transferOwnership(NEW_OWNER_ADDRESS);
-        // idrx.transferOwnership(NEW_OWNER_ADDRESS);
+
+        // Nilai supply awal untuk MockIDRX (100 Juta Token, tanpa dikalikan 10^18 karena constructor MockIDRX sudah mengalikannya)
+        uint256 initialSupplyIDRX = 100_000_000; 
+
+        // 1. Deploy Mock IDRX Token. Membutuhkan initialSupply.
+        // MockIDRX constructor akan mengalikan nilai ini dengan 10**decimals()
+        MockIDRX idrxToken = new MockIDRX(initialSupplyIDRX);
+        console.log("IDRX Token deployed at:", address(idrxToken));
+
+        // 2. Deploy StomaTrade Contract. Membutuhkan address token IDRX.
+        StomaTrade stomaTrade = new StomaTrade(address(idrxToken));
+        console.log("StomaTrade deployed at:", address(stomaTrade));
+
+        // Catatan: Token 10 juta (sudah ada di initialSupply) sudah otomatis di mint ke deployer
+        // Jika Anda ingin mint tambahan (10 juta IDRX lagi), gunakan fungsi mint:
+        // idrxToken.mint(msg.sender, 10_000_000);
+        // console.log("Minted 10M IDRX (tambahan) to deployer:", msg.sender);
         
         vm.stopBroadcast();
-        
-        // Summary
-        console.log("\n=== DEPLOYMENT SUMMARY ===");
-        console.log("Network:", getNetworkName(block.chainid));
-        console.log("Deployer:", deployer);
-        console.log("MockIDRX:", address(idrx));
-        console.log("StomaTrade:", address(stoma));
-        console.log("\n=== NEXT STEPS ===");
-        console.log("1. Verify contracts on block explorer");
-        console.log("2. Update frontend config with contract addresses");
-        console.log("3. Test createProject and approveProject functions");
-        console.log("\n=== VERIFY COMMANDS ===");
-        console.log("MockIDRX:");
-        console.log(string.concat(
-            "forge verify-contract ",
-            vm.toString(address(idrx)),
-            " MockIDRX --chain-id ",
-            vm.toString(block.chainid),
-            " --constructor-args $(cast abi-encode 'constructor(uint256)' 10000000)"
-        ));
-        console.log("\nStomaTrade:");
-        console.log(string.concat(
-            "forge verify-contract ",
-            vm.toString(address(stoma)),
-            " StomaTrade --chain-id ",
-            vm.toString(block.chainid),
-            " --constructor-args $(cast abi-encode 'constructor(address)' ",
-            vm.toString(address(idrx)),
-            ")"
-        ));
-    }
-    
-    function getNetworkName(uint256 chainId) internal pure returns (string memory) {
-        if (chainId == 1) return "Ethereum Mainnet";
-        if (chainId == 11155111) return "Sepolia Testnet";
-        if (chainId == 4202) return "Lisk Sepolia Testnet";
-        if (chainId == 31337) return "Localhost/Anvil";
-        return "Unknown Network";
     }
 }

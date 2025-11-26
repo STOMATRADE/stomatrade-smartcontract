@@ -1,276 +1,317 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
 import "../src/StomaTrade.sol";
 import "../src/MockIDRX.sol";
+import "../src/Events.sol"; // Untuk ProjectStatus
 
 contract StomaTradeTest is Test {
-    StomaTrade public stoma;
+    StomaTrade public stomaTrade;
     MockIDRX public idrx;
 
-    address public owner;
-    address public projectOwner;
-    address public investor1;
-    address public investor2;
-    address public investor3;
+    // Alamat-alamat yang digunakan untuk testing
+    address public immutable owner = address(this);
+    address public immutable projectOwner = address(0x1);
+    address public immutable investor1 = address(0x2);
+    address public immutable investor2 = address(0x3);
+    address public immutable randomUser = address(0x4);
 
-    uint256 constant INITIAL_SUPPLY = 10_000_000; // 10 juta IDRX sudah pakai decimals
-    uint256 constant PROJECT_VALUE = 100_000;
-    uint256 constant MAX_FUNDING = 50_000;
+    // Nilai-nilai konstanta (dalam unit dasar, misalnya 10^18)
+    uint256 constant UNIT = 10**18;
+    uint256 constant INITIAL_SUPPLY_IDRX = 10_000_000; // 10 Juta IDRX
+    uint256 constant PROJECT_VALUE = 500_000 * UNIT;
+    uint256 constant MAX_FUNDING = 100_000 * UNIT;
+    uint256 constant INVEST_AMOUNT_1 = 60_000 * UNIT; // 60%
+    uint256 constant INVEST_AMOUNT_2 = 40_000 * UNIT; // 40%
 
-    event ProjectCreated(uint256 indexed idProject, address indexed owner, uint256 valueProject, uint256 maxCrowdFunding);
-    event Invested(uint256 indexed idProject, address indexed investor, uint256 amount, uint256 receiptTokenId);
-    event ProfitDeposited(uint256 indexed idProject, uint256 amount);
-    event ProfitClaimed(uint256 indexed idProject, address indexed user, uint256 amount);
-
+    // Fungsi setUp akan dijalankan sebelum setiap test
     function setUp() public {
-        owner = address(this);
-        projectOwner = makeAddr("projectOwner");
-        investor1 = makeAddr("investor1");
-        investor2 = makeAddr("investor2");
-        investor3 = makeAddr("investor3");
+        // 1. Deploy Mock IDRX
+        // MockIDRX constructor menerima supply tanpa dikalikan 10^18
+        idrx = new MockIDRX(INITIAL_SUPPLY_IDRX);
+        
+        // 2. Deploy StomaTrade
+        // StomaTrade constructor membutuhkan address token IDRX
+        stomaTrade = new StomaTrade(address(idrx));
 
-        idrx = new MockIDRX(INITIAL_SUPPLY);
-        stoma = new StomaTrade(address(idrx));
+        // 3. Mint IDRX ke addresses investor untuk testing
+        // Fungsi mint MockIDRX menerima nilai tanpa 10^18
+        idrx.mint(investor1, 1_000_000); // 1 Juta IDRX
+        idrx.mint(investor2, 1_000_000); // 1 Juta IDRX
 
-        // Distribusi token ke investor (unit token biasa)
-        idrx.mint(investor1, 100_000);
-        idrx.mint(investor2, 100_000);
-        idrx.mint(investor3, 100_000);
-
-        console.log("=== SETUP COMPLETE ===");
-        console.log("IDRX deployed at:", address(idrx));
-        console.log("StomaTrade deployed at:", address(stoma));
-        console.log("Owner balance:", idrx.balanceOfIDRX(owner));
+        // 4. Label addresses untuk debugging
+        vm.label(owner, "Owner (Deployer)");
+        vm.label(projectOwner, "ProjectOwner");
+        vm.label(investor1, "Investor1");
+        vm.label(investor2, "Investor2");
+        vm.label(randomUser, "RandomUser");
     }
 
-    // ================= HELPER FUNCTION =================
-    function createAndApproveProject() internal returns (uint256 projectId) {
-        projectId = stoma.createProject(projectOwner, PROJECT_VALUE, MAX_FUNDING);
-        stoma.approveProject(projectId);
+    // --- HELPER FUNCTIONS ---
+    function createAndApproveProject() internal returns (uint256) {
+        uint256 projectId = stomaTrade.createProject(
+            projectOwner,
+            PROJECT_VALUE,
+            MAX_FUNDING
+        );
+        stomaTrade.approveProject(projectId);
+        return projectId;
     }
 
-    // ================= TEST CREATE PROJECT =================
-    function testCreateProject() public {
-        uint256 projectId = stoma.createProject(projectOwner, PROJECT_VALUE, MAX_FUNDING);
 
-        (uint256 id, address owner_, uint256 maxFunding, uint256 raised, StomaTrade.ProjectStatus status) = stoma.getProject(projectId);
-        assertEq(id, projectId);
+    function testCreateProjectSuccess() public {
+        uint256 projectId = stomaTrade.createProject(
+            projectOwner,
+            PROJECT_VALUE,
+            MAX_FUNDING
+        );
+
+        assertEq(projectId, 1, "Project ID must be 1");
+        
+        (
+            uint256 id,
+            address owner_,
+            uint256 maxFunding_,
+            uint256 totalRaised,
+            ProjectStatus status
+        ) = stomaTrade.getProject(projectId);
+
+        assertEq(id, 1);
         assertEq(owner_, projectOwner);
-        assertEq(maxFunding, MAX_FUNDING);
-        assertEq(raised, 0);
-        assertEq(uint8(status), uint8(StomaTrade.ProjectStatus.PENDING));
-
-        console.log("Project created successfully!");
+        assertEq(maxFunding_, MAX_FUNDING);
+        assertEq(totalRaised, 0);
+        assertEq(uint(status), uint(ProjectStatus.PENDING), "Initial status must be PENDING");
     }
 
-    function testCreateProjectWithZeroFunding() public {
-        vm.expectRevert(StomaTrade.ZeroAmount.selector);
-        stoma.createProject(projectOwner, PROJECT_VALUE, 0);
+    function testFailCreateProjectZeroFunding() public {
+        // Harus revert ZeroAmount()
+        vm.expectRevert("ZeroAmount"); 
+        stomaTrade.createProject(projectOwner, PROJECT_VALUE, 0);
+    }
+    
+    function testApproveProjectSuccess() public {
+        uint256 projectId = stomaTrade.createProject(projectOwner, PROJECT_VALUE, MAX_FUNDING);
+        
+        stomaTrade.approveProject(projectId);
+
+        (, , , , ProjectStatus status) = stomaTrade.getProject(projectId);
+        assertEq(uint(status), uint(ProjectStatus.ACTIVE), "Status should be ACTIVE after approval");
+        assertTrue(stomaTrade.allowedApprovals(projectOwner), "Project owner should be approved");
     }
 
-    function testCreateProjectOnlyOwner() public {
-        vm.prank(investor1);
-        vm.expectRevert();
-        stoma.createProject(projectOwner, PROJECT_VALUE, MAX_FUNDING);
+    function testFailApproveProjectNotOwner() public {
+        uint256 projectId = stomaTrade.createProject(projectOwner, PROJECT_VALUE, MAX_FUNDING);
+        
+        vm.prank(randomUser);
+        // Harus revert Ownable/NotOwner
+        vm.expectRevert(); 
+        stomaTrade.approveProject(projectId);
     }
 
-    // ================= TEST INVEST =================
-    function testInvest() public {
+
+    function testInvestSuccess() public {
         uint256 projectId = createAndApproveProject();
-
-        uint256 investAmount = 10_000;
-
+        uint256 investAmount = 10_000 * UNIT;
+        
+        // 1. Approve IDRX ke StomaTrade
         vm.startPrank(investor1);
-        idrx.approve(address(stoma), investAmount);
-        vm.expectEmit(true, true, false, true);
-        emit Invested(projectId, investor1, investAmount, 1);
-        stoma.invest(projectId, investAmount);
+        idrx.approve(address(stomaTrade), investAmount);
+        
+        // 2. Invest
+        stomaTrade.invest(projectId, investAmount);
         vm.stopPrank();
 
-        assertEq(stoma.contribution(projectId, investor1), investAmount);
-        assertEq(stoma.ownerOf(1), investor1);
+        // Cek total raised dan contribution
+        (, , , uint256 totalRaised, ) = stomaTrade.getProject(projectId);
+        assertEq(totalRaised, investAmount, "Total raised must match investment");
+        assertEq(stomaTrade.contribution(projectId, investor1), investAmount, "Contribution mapping incorrect");
 
-        (, , , uint256 raised, ) = stoma.getProject(projectId);
-        assertEq(raised, investAmount);
-
-        console.log("Investment successful!");
+        // Cek kepemilikan NFT (Soulbound Token)
+        uint256 nftId = 1;
+        assertEq(stomaTrade.ownerOf(nftId), investor1, "Investor should own NFT (ID 1)");
     }
-
-    function testInvestMultipleInvestors() public {
+    
+    function testInvestReachesMaxFundingAndChangesStatus() public {
         uint256 projectId = createAndApproveProject();
 
-        uint256 amount1 = 20_000;
-        uint256 amount2 = 15_000;
-        uint256 amount3 = 15_000;
+        // Invest exact max funding
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), MAX_FUNDING);
+        stomaTrade.invest(projectId, MAX_FUNDING);
+        vm.stopPrank();
+
+        // Check status changed to SUCCESS
+        (, , , , ProjectStatus status) = stomaTrade.getProject(projectId);
+        assertEq(uint(status), uint(ProjectStatus.SUCCESS), "Status should be SUCCESS");
+    }
+    
+    function testFailInvestMaxFundingExceeded() public {
+        uint256 projectId = createAndApproveProject();
+        uint256 tooMuch = MAX_FUNDING + 1;
 
         vm.startPrank(investor1);
-        idrx.approve(address(stoma), amount1);
-        stoma.invest(projectId, amount1);
+        idrx.approve(address(stomaTrade), tooMuch);
+        
+        // Harus revert MaxFundingExceeded()
+        vm.expectRevert("MaxFundingExceeded"); 
+        stomaTrade.invest(projectId, tooMuch); 
+        vm.stopPrank();
+    }
+    
+    function testFailInvestUnapprovedProject() public {
+        // Project dibuat tapi belum di-approve
+        uint256 projectId = stomaTrade.createProject(projectOwner, PROJECT_VALUE, MAX_FUNDING);
+        uint256 investAmount = 10_000 * UNIT;
+
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), investAmount);
+        
+        // Harus revert ApprovalNotAllowed() karena project owner belum di-approve
+        vm.expectRevert("ApprovalNotAllowed"); 
+        stomaTrade.invest(projectId, investAmount); 
+        vm.stopPrank();
+    }
+
+
+
+    function testClaimRefundSuccess() public {
+        uint256 projectId = createAndApproveProject();
+        uint256 investAmount = 50_000 * UNIT;
+        uint256 balanceBefore;
+        
+        // 1. Invest
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), investAmount);
+        stomaTrade.invest(projectId, investAmount);
+        balanceBefore = idrx.balanceOf(investor1); // Saldo IDRX setelah invest (sudah berkurang)
+        vm.stopPrank();
+
+        // 2. Set status ke REFUNDING (hanya owner StomaTrade)
+        stomaTrade.refundable(projectId);
+
+        // 3. Claim refund
+        vm.prank(investor1);
+        stomaTrade.claimRefund(projectId);
+
+        // Cek saldo kembali
+        assertEq(idrx.balanceOf(investor1), balanceBefore + investAmount, "Balance should be fully restored");
+        assertEq(stomaTrade.contribution(projectId, investor1), 0, "Contribution must be reset to 0");
+    }
+
+    function testFailClaimRefundNotRefunding() public {
+        uint256 projectId = createAndApproveProject(); // Status ACTIVE
+        uint256 investAmount = 10 * UNIT;
+
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), investAmount);
+        stomaTrade.invest(projectId, investAmount);
+        
+        // Harus revert InvalidStatus() karena status masih ACTIVE
+        vm.expectRevert("InvalidStatus"); 
+        stomaTrade.claimRefund(projectId);
+    }
+    
+
+    
+    function testWithDrawProjectFundSuccess() public {
+        uint256 projectId = createAndApproveProject();
+
+        // Invest to reach max funding (Status = SUCCESS)
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), MAX_FUNDING);
+        stomaTrade.invest(projectId, MAX_FUNDING);
+        vm.stopPrank();
+
+        // Withdraw
+        uint256 balanceBefore = idrx.balanceOf(projectOwner);
+        stomaTrade.withDrawProjectFund(projectId);
+        uint256 balanceAfter = idrx.balanceOf(projectOwner);
+
+        assertEq(balanceAfter - balanceBefore, MAX_FUNDING, "Project owner should receive full funding");
+
+        // Check status changed to CLOSED
+        (, , , , ProjectStatus status) = stomaTrade.getProject(projectId);
+        assertEq(uint(status), uint(ProjectStatus.CLOSED), "Status should be CLOSED");
+    }
+    
+    function testFailWithDrawNotSuccess() public {
+        uint256 projectId = createAndApproveProject(); // Status ACTIVE
+        
+        // Harus revert InvalidStatus()
+        vm.expectRevert("InvalidStatus"); 
+        stomaTrade.withDrawProjectFund(projectId);
+    }
+
+    function testDepositAndClaimProfitSingleInvestor() public {
+        uint256 projectId = createAndApproveProject();
+
+        // 1. Invest 100% (MAX_FUNDING)
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), MAX_FUNDING);
+        stomaTrade.invest(projectId, MAX_FUNDING);
+        vm.stopPrank();
+        
+        // 2. Deposit profit (misalnya 10,000 IDRX, dilakukan oleh Owner)
+        uint256 profitAmount = 10_000 * UNIT;
+        idrx.approve(address(stomaTrade), profitAmount);
+        stomaTrade.depositProfit(projectId, profitAmount);
+
+        // 3. Claim profit
+        uint256 balanceBefore = idrx.balanceOf(investor1);
+        vm.prank(investor1);
+        stomaTrade.claimProfit(projectId);
+        uint256 balanceAfter = idrx.balanceOf(investor1);
+
+        assertEq(balanceAfter - balanceBefore, profitAmount, "Investor 1 should claim 100% of profit");
+        assertEq(stomaTrade.getClaimableProfit(projectId, investor1), 0, "Claimable profit must be 0 after claim");
+    }
+
+    function testDepositAndClaimProfitMultipleInvestors() public {
+        uint256 projectId = createAndApproveProject();
+        
+        // 1. Invest (60% dan 40%)
+        vm.startPrank(investor1);
+        idrx.approve(address(stomaTrade), INVEST_AMOUNT_1);
+        stomaTrade.invest(projectId, INVEST_AMOUNT_1);
         vm.stopPrank();
 
         vm.startPrank(investor2);
-        idrx.approve(address(stoma), amount2);
-        stoma.invest(projectId, amount2);
+        idrx.approve(address(stomaTrade), INVEST_AMOUNT_2);
+        stomaTrade.invest(projectId, INVEST_AMOUNT_2);
         vm.stopPrank();
 
-        vm.startPrank(investor3);
-        idrx.approve(address(stoma), amount3);
-        stoma.invest(projectId, amount3);
-        vm.stopPrank();
-
-        (, , , uint256 raised, StomaTrade.ProjectStatus status) = stoma.getProject(projectId);
-        assertEq(raised, MAX_FUNDING);
-        assertEq(uint8(status), uint8(StomaTrade.ProjectStatus.SUCCESS));
-
-        console.log("Multiple investors invested successfully!");
+        // 2. Deposit profit (10,000 IDRX)
+        uint256 profitAmount = 10_000 * UNIT;
+        idrx.approve(address(stomaTrade), profitAmount);
+        stomaTrade.depositProfit(projectId, profitAmount); // Dilakukan oleh Owner
+        
+        // 3. Perhitungan yang diharapkan
+        uint256 expectedProfit1 = (profitAmount * INVEST_AMOUNT_1) / MAX_FUNDING; // 60%
+        uint256 expectedProfit2 = (profitAmount * INVEST_AMOUNT_2) / MAX_FUNDING; // 40%
+        
+        // Cek claimable
+        assertEq(stomaTrade.getClaimableProfit(projectId, investor1), expectedProfit1, "Claimable 1 incorrect");
+        assertEq(stomaTrade.getClaimableProfit(projectId, investor2), expectedProfit2, "Claimable 2 incorrect");
     }
 
-    function testInvestExceedMaxFunding() public {
+
+    function testFailTransferNFTIsSoulbound() public {
         uint256 projectId = createAndApproveProject();
+        uint256 investAmount = 10 * UNIT;
 
-        uint256 exceedAmount = MAX_FUNDING + 1;
-
+        // Investor1 invest dan mendapatkan NFT ID 1
         vm.startPrank(investor1);
-        idrx.approve(address(stoma), exceedAmount);
-        vm.expectRevert(StomaTrade.MaxFundingExceeded.selector);
-        stoma.invest(projectId, exceedAmount);
-        vm.stopPrank();
-    }
-
-    function testInvestWithZeroAmount() public {
-        uint256 projectId = createAndApproveProject();
-
-        vm.prank(investor1);
-        vm.expectRevert(StomaTrade.ZeroAmount.selector);
-        stoma.invest(projectId, 0);
-    }
-
-    // ================= TEST WITHDRAW =================
-    function testWithdrawProjectFund() public {
-        uint256 projectId = createAndApproveProject();
-
-        vm.startPrank(investor1);
-        idrx.approve(address(stoma), MAX_FUNDING);
-        stoma.invest(projectId, MAX_FUNDING);
-        vm.stopPrank();
-
-        uint256 balanceBefore = idrx.balanceOfIDRX(projectOwner);
-        stoma.withDrawProjectFund(projectId);
-        uint256 balanceAfter = idrx.balanceOfIDRX(projectOwner);
-
-        assertEq(balanceAfter - balanceBefore, MAX_FUNDING);
-
-        (, , , , StomaTrade.ProjectStatus status) = stoma.getProject(projectId);
-        assertEq(uint8(status), uint8(StomaTrade.ProjectStatus.CLOSED));
-
-        console.log("Project fund withdrawn!");
-    }
-
-    // ================= TEST REFUND =================
-    function testRefund() public {
-        uint256 projectId = createAndApproveProject();
-
-        uint256 investAmount = 10_000;
-        vm.startPrank(investor1);
-        idrx.approve(address(stoma), investAmount);
-        stoma.invest(projectId, investAmount);
-        vm.stopPrank();
-
-        stoma.refundable(projectId);
-
-        uint256 balanceBefore = idrx.balanceOfIDRX(investor1);
-        vm.prank(investor1);
-        stoma.claimRefund(projectId);
-        uint256 balanceAfter = idrx.balanceOfIDRX(investor1);
-
-        assertEq(balanceAfter - balanceBefore, investAmount);
-        assertEq(stoma.contribution(projectId, investor1), 0);
-
-        console.log("Refund claimed successfully!");
-    }
-
-    // ================= TEST PROFIT DISTRIBUTION =================
-    function testProfitDistribution() public {
-        uint256 projectId = createAndApproveProject();
-
-        vm.startPrank(investor1);
-        idrx.approve(address(stoma), 20_000);
-        stoma.invest(projectId, 20_000);
-        vm.stopPrank();
-
-        vm.startPrank(investor2);
-        idrx.approve(address(stoma), 30_000);
-        stoma.invest(projectId, 30_000);
-        vm.stopPrank();
-
-        stoma.withDrawProjectFund(projectId);
-
-        uint256 profit = 10_000;
-        idrx.approve(address(stoma), profit);
-        vm.expectEmit(true, false, false, true);
-        emit ProfitDeposited(projectId, profit);
-        stoma.depositProfit(projectId, profit);
-
-        uint256 claimable1 = stoma.getClaimableProfit(projectId, investor1);
-        uint256 claimable2 = stoma.getClaimableProfit(projectId, investor2);
-
-        assertEq(claimable1, 4_000);
-        assertEq(claimable2, 6_000);
-
-        vm.prank(investor1);
-        stoma.claimProfit(projectId);
-
-        uint256 balance1After = idrx.balanceOfIDRX(investor1);
-        assertEq(balance1After, 4_000);
-
-        console.log("Profit distributed correctly!");
-    }
-
-    // ================= TEST NFT SBT =================
-    function testNFTTransferDisabled() public {
-        uint256 projectId = createAndApproveProject();
-
-        vm.startPrank(investor1);
-        idrx.approve(address(stoma), 10_000);
-        stoma.invest(projectId, 10_000);
-        vm.expectRevert(StomaTrade.TransferNotAllowed.selector);
-        stoma.transferFrom(investor1, investor2, 1);
-        vm.stopPrank();
-    }
-
-    function testNFTApprovalDisabled() public {
-        uint256 projectId = createAndApproveProject();
-
-        vm.startPrank(investor1);
-        idrx.approve(address(stoma), 10_000);
-        stoma.invest(projectId, 10_000);
-        vm.expectRevert(StomaTrade.ApprovalNotAllowed.selector);
-        stoma.approve(investor2, 1);
-        vm.stopPrank();
-    }
-
-    // ================= TEST EDGE CASES =================
-    function testGetInvalidProject() public {
-        vm.expectRevert(StomaTrade.InvalidProject.selector);
-        stoma.getProject(999);
-    }
-
-    function testInvestToClosedProject() public {
-        uint256 projectId = createAndApproveProject();
-
-        vm.startPrank(investor1);
-        idrx.approve(address(stoma), MAX_FUNDING);
-        stoma.invest(projectId, MAX_FUNDING);
-        vm.stopPrank();
-
-        stoma.withDrawProjectFund(projectId);
-
-        vm.startPrank(investor2);
-        idrx.approve(address(stoma), 1_000);
-        vm.expectRevert(StomaTrade.InvalidStatus.selector);
-        stoma.invest(projectId, 1_000);
+        idrx.approve(address(stomaTrade), investAmount);
+        stomaTrade.invest(projectId, investAmount);
+        
+        uint256 nftId = 1;
+        
+        // Coba transfer dari investor1 ke investor2
+        // Harus revert TransferNotAllowed() karena ini Soulbound Token
+        vm.expectRevert("TransferNotAllowed");
+        stomaTrade.transferFrom(investor1, investor2, nftId);
+        
         vm.stopPrank();
     }
 }

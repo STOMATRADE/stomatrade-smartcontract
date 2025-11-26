@@ -19,5 +19,5 @@ remappings = [
 
 # RPC endpoints
 [rpc_endpoints]
-lisk_sepolia = "https://rpc.sepolia-api.lisk.com"
+base_sepolia = "hhttps://sepolia.base.org"
 mainnet = "https://eth.llamarpc.com"

@@ -1,22 +1,18 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.30;
 
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
+// Mengganti HandleError.sol dengan Errors.sol
+import "./HandleError.sol";
+import "./Events.sol";
+
+contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
-    
-    enum ProjectStatus {
-        PENDING,
-        ACTIVE,
-        SUCCESS,
-        REFUNDING,
-        CLOSED
-    }
 
     struct Project {
         uint256 id;
@@ -37,47 +33,7 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
     uint256 public nextProjectId = 1;
     uint256 public nextNftId = 1;
 
-    event ProjectCreated(
-        uint256 indexed idProject,
-        address indexed owner,
-        uint256 valueProject,
-        uint256 maxCrowdFunding
-    );
-
-    event ProjectStatusChanged(
-        uint256 indexed idProject,
-        ProjectStatus oldStatus,
-        ProjectStatus newStatus
-    );
-
-    event Invested(
-        uint256 indexed idProject,
-        address indexed investor,
-        uint256 amount,
-        uint256 receiptTokenId
-    );
-
-    event Refunded(
-        uint256 indexed idProject,
-        address indexed investor,
-        uint256 amount
-    );
-
-    event WithDraw(
-        uint256 indexed idProject,
-        address indexed projectOwner,
-        uint256 amount
-    );
-
-    event ProfitDeposited(uint256 indexed idProject, uint256 amount);
-
-    event ProfitClaimed(
-        uint256 indexed idProject,
-        address indexed user,
-        uint256 amount
-    );
-
-    // ========== STATE VARIABLES ==========
+    // STATE
     mapping(uint256 => Project) public projects;
     mapping(uint256 => mapping(address => uint256)) public contribution;
     mapping(uint256 => Investment) public investmentsByTokenId;
@@ -85,105 +41,105 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
     mapping(uint256 => mapping(address => uint256)) public claimedProfit;
     mapping(address => bool) public allowedApprovals;
 
-    // ========== ERRORS ==========
-    error InvalidProject();
-    error InvalidStatus();
-    error ZeroAmount();
-    error MaxFundingExceeded();
-    error NotProjectOwner();
-    error NothingToRefund();
-    error NothingToWithdraw();
-    error TransferNotAllowed();
-    error ApprovalNotAllowed();
-
-    // ========== SBT IMPLEMENTATION ==========
+    // State baru untuk UX: Melacak total investasi per user di semua proyek
+    mapping(address => uint256) public totalInvestment;
     
-    function _update(
+    // tokenCid digunakan untuk Project ID (sebelum mint) dan NFT ID (setelah mint)
+    mapping(uint256 => string) public tokenCid; 
+
+
+    // Penggantian fungsi _beforeTokenTransfer untuk menerapkan SBT
+    function _beforeTokenTransfer(
+        address from,
         address to,
         uint256 tokenId,
-        address auth
-    ) internal virtual override returns (address) {
-        address from = _ownerOf(tokenId);
-        
-        // Allow minting (from = address(0))
-        // Block transfer (from != address(0) && to != address(0))
-        // Allow burning (to = address(0))
+        uint256 batchSize
+    ) internal override {
+        super._beforeTokenTransfer(from, to, tokenId, batchSize);
+
+        // Cegah transfer (SBT logic), hanya mint dan burn yang boleh
         if (from != address(0) && to != address(0)) {
-            revert TransferNotAllowed();
+            revert Errors.TransferNotAllowed();
         }
-        
-        return super._update(to, tokenId, auth);
     }
 
-    // ========== CONSTRUCTOR ==========
-    
-    constructor(address idrxTokenAddress)
-        ERC721("Crowdfunding Receipt", "CFR")
-        Ownable(msg.sender)
-    {
-        require(idrxTokenAddress != address(0), "IDRX address empty");
-        idrx = IERC20(idrxTokenAddress);
-    }
-
-    // ========== MODIFIERS ==========
-    
-    modifier onlyValidProject(uint256 idProject) {
-        if (idProject == 0 || idProject >= nextProjectId) {
-            revert InvalidProject();
-        }
+    // ---------------- MODIFIERS ----------------
+    modifier onlyValidProject(uint256 _idProject) {
+        // Menggunakan Errors.InvalidProject()
+        if (_idProject == 0 || _idProject >= nextProjectId) revert Errors.InvalidProject();
         _;
     }
 
     modifier onlyApprovedProjectOwner(uint256 _idProject) {
         Project storage p = projects[_idProject];
-        if (!allowedApprovals[p.projectOwner]) {
-            revert ApprovalNotAllowed();
-        }
+        // Menggunakan Errors.ApprovalNotAllowed()
+        if (!allowedApprovals[p.projectOwner]) revert Errors.ApprovalNotAllowed();
         _;
     }
 
-    // ========== PROJECT MANAGEMENT ==========
+    // ---------------- CONSTRUCTOR ----------------
+    constructor(address idrxTokenAddress)
+        ERC721("CrowdFunding Stomatrade", "STP")
+        Ownable(msg.sender)
+    {
+        // Memperbaiki error: seharusnya Errors.ZeroAddress()
+        if (idrxTokenAddress == address(0)) revert Errors.ZeroAddress();
+        idrx = IERC20(idrxTokenAddress);
+    }
 
+    // ---------------- PROJECT MANAGEMENT ----------------
     function createProject(
-        address _projectOwner,
         uint256 _valueProject,
-        uint256 _maxCrowdFunding
-    ) external onlyOwner returns (uint256 _idProject) {
-        if (_maxCrowdFunding == 0) revert ZeroAmount();
-        if (_projectOwner == address(0)) {
-            _projectOwner = msg.sender;
-        }
+        uint256 _maxCrowdFunding,
+        string memory _cid
+    ) external returns (uint256 _idProject) {
+        // Menggunakan Errors.ZeroAmount()
+        if (_maxCrowdFunding == 0) revert Errors.ZeroAmount();
+        
+        // Memperbaiki agar projectOwner adalah msg.sender (Collector)
+        if (msg.sender == address(0)) revert Errors.ZeroAddress(); 
 
         _idProject = nextProjectId++;
         projects[_idProject] = Project({
             id: _idProject,
-            projectOwner: _projectOwner,
+            projectOwner: msg.sender,
             valueProject: _valueProject,
             maxCrowdFunding: _maxCrowdFunding,
             totalRaised: 0,
             status: ProjectStatus.PENDING
         });
 
-        emit ProjectCreated(
-            _idProject,
-            _projectOwner,
-            _valueProject,
-            _maxCrowdFunding
-        );
+        // Simpan CID (metadata project)
+        tokenCid[_idProject] = _cid;
+
+        emit ProjectCreated(_idProject, msg.sender, _valueProject, _maxCrowdFunding);
     }
 
-    function approveProject(uint256 _idProject) 
+    function approveProject(uint256 _idProject)
         external
         onlyOwner
-        onlyValidProject(_idProject) 
+        onlyValidProject(_idProject)
     {
         Project storage p = projects[_idProject];
-        if (p.status != ProjectStatus.PENDING) revert InvalidStatus();
+        // Menggunakan Errors.InvalidState()
+        if (p.status != ProjectStatus.PENDING) revert Errors.InvalidState();
 
         allowedApprovals[p.projectOwner] = true;
         ProjectStatus oldStatus = p.status;
         p.status = ProjectStatus.ACTIVE;
         emit ProjectStatusChanged(_idProject, oldStatus, ProjectStatus.ACTIVE);
+
+        // --- MINT Project SBT ke project owner ---
+        uint256 nftId = nextNftId++;
+        _safeMint(p.projectOwner, nftId);
+        
+        // Mengambil CID yang disimpan saat createProject
+        string memory projectCid = tokenCid[_idProject]; 
+        string memory uri = string(abi.encodePacked("https://gateway.pinata.cloud/ipfs/", projectCid));
+        _setTokenURI(nftId, uri);
+        
+        // Simpan CID menggunakan NFT ID agar dapat diakses dari tokenURI
+        tokenCid[nftId] = projectCid; 
     }
 
     function setProjectStatus(uint256 _idProject, ProjectStatus newStatus)
@@ -197,61 +153,65 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
         emit ProjectStatusChanged(_idProject, oldStatus, newStatus);
     }
 
-    // ========== INVESTMENT ==========
-
+    // ---------------- INVESTMENT ----------------
     function invest(uint256 _idProject, uint256 _amount)
         external
         nonReentrant
         onlyValidProject(_idProject)
         onlyApprovedProjectOwner(_idProject)
     {
-        if (_amount == 0) revert ZeroAmount();
+        // Menggunakan Errors.ZeroAmount()
+        if (_amount == 0) revert Errors.ZeroAmount();
 
         Project storage p = projects[_idProject];
-
-        if (p.status != ProjectStatus.ACTIVE) revert InvalidStatus();
-
-        if (p.totalRaised + _amount > p.maxCrowdFunding)
-            revert MaxFundingExceeded();
+        // Menggunakan Errors.InvalidState()
+        if (p.status != ProjectStatus.ACTIVE) revert Errors.InvalidState();
+        // Menggunakan Errors.MaxFundingExceeded()
+        if (p.totalRaised + _amount > p.maxCrowdFunding) revert Errors.MaxFundingExceeded();
 
         idrx.safeTransferFrom(msg.sender, address(this), _amount);
 
         p.totalRaised += _amount;
         contribution[_idProject][msg.sender] += _amount;
+        
+        // UPDATE UX: Melacak total investasi user
+        totalInvestment[msg.sender] += _amount; 
 
-        uint256 _NftId = nextNftId++;
-        _safeMint(msg.sender, _NftId);
+        // --- Mint SBT investor ---
+        uint256 nftId = nextNftId++;
+        _safeMint(msg.sender, nftId);
 
-        investmentsByTokenId[_NftId] = Investment({
+        // Mengambil CID Project (yang sudah tersimpan di approveProject) untuk metadata Investment Receipt
+        // Walaupun metadata ini tidak se-spesifik per investasi, ini merujuk ke project yang diinvestasikan.
+        string memory projectCid = tokenCid[_idProject];
+        string memory uri = string(abi.encodePacked("https://gateway.pinata.cloud/ipfs/", projectCid));
+        _setTokenURI(nftId, uri);
+        tokenCid[nftId] = projectCid; // Simpan CID dengan NFT ID
+
+        investmentsByTokenId[nftId] = Investment({
             idProject: _idProject,
             investor: msg.sender,
             amount: _amount
         });
 
-        emit Invested(_idProject, msg.sender, _amount, _NftId);
+        emit Invested(_idProject, msg.sender, _amount, nftId);
 
-        if (
-            p.totalRaised == p.maxCrowdFunding &&
-            p.status == ProjectStatus.ACTIVE
-        ) {
+        if (p.totalRaised == p.maxCrowdFunding && p.status == ProjectStatus.ACTIVE) {
             ProjectStatus oldStatus = p.status;
             p.status = ProjectStatus.SUCCESS;
             emit ProjectStatusChanged(_idProject, oldStatus, ProjectStatus.SUCCESS);
         }
     }
 
-    // ========== REFUND ==========
-
+    // REFUND
     function refundable(uint256 _idProject)
         external
         onlyOwner
         onlyValidProject(_idProject)
     {
         Project storage p = projects[_idProject];
-
-        if (p.status != ProjectStatus.ACTIVE && p.status != ProjectStatus.SUCCESS) {
-            revert InvalidStatus();
-        }
+        // Menggunakan Errors.InvalidState()
+        if (p.status != ProjectStatus.ACTIVE && p.status != ProjectStatus.SUCCESS) revert Errors.InvalidState();
 
         ProjectStatus oldStatus = p.status;
         p.status = ProjectStatus.REFUNDING;
@@ -264,19 +224,24 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
         onlyValidProject(_idProject)
     {
         Project storage p = projects[_idProject];
-        if (p.status != ProjectStatus.REFUNDING) revert InvalidStatus();
+        // Menggunakan Errors.InvalidState()
+        if (p.status != ProjectStatus.REFUNDING) revert Errors.InvalidState();
 
         uint256 _amount = contribution[_idProject][msg.sender];
-        if (_amount == 0) revert NothingToRefund();
+        // Menggunakan Errors.NothingToRefund()
+        if (_amount == 0) revert Errors.NothingToRefund();
+
         contribution[_idProject][msg.sender] = 0;
         p.totalRaised -= _amount;
+        
+        // UPDATE UX: Kurangi dari total investasi user
+        totalInvestment[msg.sender] -= _amount; 
 
         idrx.safeTransfer(msg.sender, _amount);
         emit Refunded(_idProject, msg.sender, _amount);
     }
 
-    // ========== WITHDRAWAL ==========
-
+    // WITHDraw
     function withDrawProjectFund(uint256 _idProject)
         external
         nonReentrant
@@ -284,10 +249,12 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
         onlyValidProject(_idProject)
     {
         Project storage p = projects[_idProject];
-        if (p.status != ProjectStatus.SUCCESS) revert InvalidStatus();
+        // Menggunakan Errors.InvalidState()
+        if (p.status != ProjectStatus.SUCCESS) revert Errors.InvalidState();
 
         uint256 _amount = p.totalRaised;
-        if (_amount == 0) revert NothingToWithdraw();
+        // Menggunakan Errors.NothingToWithdraw()
+        if (_amount == 0) revert Errors.NothingToWithdraw();
 
         ProjectStatus oldStatus = p.status;
         p.status = ProjectStatus.CLOSED;
@@ -298,13 +265,14 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
         emit ProjectStatusChanged(_idProject, oldStatus, ProjectStatus.CLOSED);
     }
 
-    // ========== PROFIT DISTRIBUTION ==========
-
+    // PROFIT 
     function depositProfit(uint256 _idProject, uint256 _amount)
         external
         onlyOwner
+        onlyValidProject(_idProject)
     {
-        require(_amount > 0, "Zero Amount");
+        // Menggunakan Errors.ZeroAmount()
+        if (_amount == 0) revert Errors.ZeroAmount();
 
         idrx.safeTransferFrom(msg.sender, address(this), _amount);
         profitPool[_idProject] += _amount;
@@ -318,30 +286,52 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
     {
         Project storage p = projects[_idProject];
 
-        if (p.maxCrowdFunding == 0) revert InvalidStatus();
+        // Menggunakan Errors.InvalidState()
+        if (p.maxCrowdFunding == 0) revert Errors.InvalidState();
+
         uint256 userContribution = contribution[_idProject][msg.sender];
-        if (userContribution == 0) revert NothingToWithdraw();
+        // Menggunakan Errors.NothingToWithdraw()
+        if (userContribution == 0) revert Errors.NothingToWithdraw();
 
         uint256 totalProfit = profitPool[_idProject];
-        if (totalProfit == 0) revert NothingToWithdraw();
-
-        if (p.totalRaised == 0) revert InvalidStatus();
+        // Menggunakan Errors.NothingToWithdraw()
+        if (totalProfit == 0) revert Errors.NothingToWithdraw();
+        // Menggunakan Errors.InvalidState()
+        if (p.totalRaised == 0) revert Errors.InvalidState();
 
         uint256 entitled = (totalProfit * userContribution) / p.totalRaised;
-
         uint256 already = claimedProfit[_idProject][msg.sender];
-        if (entitled <= already) revert NothingToWithdraw();
+        // Menggunakan Errors.NothingToWithdraw()
+        if (entitled <= already) revert Errors.NothingToWithdraw();
 
         uint256 toClaim = entitled - already;
-
         claimedProfit[_idProject][msg.sender] = entitled;
 
         idrx.safeTransfer(msg.sender, toClaim);
-
         emit ProfitClaimed(_idProject, msg.sender, toClaim);
     }
 
-    // ========== VIEW FUNCTIONS ==========
+    // ---------------- VIEW ---------------- 
+    
+    // Fungsi baru untuk mengambil total investasi pengguna
+    function getTotalInvestment(address _user) external view returns (uint256) {
+        return totalInvestment[_user];
+    }
+
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        override
+        returns (string memory)
+    {
+        // Menggunakan Errors.InvalidInput() untuk token yang tidak ada
+        if (!_exists(tokenId)) revert Errors.InvalidInput();
+        
+        // Membangun URI menggunakan CID yang disimpan
+        string memory _cid = tokenCid[tokenId];
+        return string(abi.encodePacked("ipfs://", _cid));
+    }
+
 
     function getProject(uint256 _idProject)
         external
@@ -350,13 +340,13 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
         returns (
             uint256 id,
             address projectOwner_,
-            uint256 valueProject,
-            uint256 totalRaised,
-            ProjectStatus status
+            uint256 valueProject_,
+            uint256 totalRaised_,
+            ProjectStatus status_
         )
     {
         Project memory p = projects[_idProject];
-        return (p.id, p.projectOwner, p.maxCrowdFunding, p.totalRaised, p.status);
+        return (p.id, p.projectOwner, p.valueProject, p.totalRaised, p.status);
     }
 
     function getClaimableProfit(uint256 _idProject, address _user)
@@ -372,7 +362,7 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
 
         Project memory p = projects[_idProject];
         if (p.totalRaised == 0) return 0;
-        
+
         uint256 entitled = (totalProfit * userContribution) / p.totalRaised;
         uint256 already = claimedProfit[_idProject][_user];
 
@@ -384,7 +374,8 @@ contract StomaTrade is ERC721, ReentrancyGuard, Ownable {
         view
         returns (Investment memory)
     {
-        require(_ownerOf(_NftId) != address(0), "NftId not found");
+        // Menggunakan fungsi _ownerOf dari ERC721
+        if (_ownerOf(_NftId) == address(0)) revert Errors.InvalidProject();
         return investmentsByTokenId[_NftId];
     }
 }
