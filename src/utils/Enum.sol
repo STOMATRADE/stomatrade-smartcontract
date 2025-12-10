@@ -6,7 +6,7 @@ enum ProjectStatus {
     CLOSED, // whne project closed to be invested by public
     PROCESSED, // the invested liquidity has been withdraweb by stomata and being processed
     REFUND, // when the project is failed and liquidity is refunded
-    SUCCESS // when the project has finished and success and investor could clain the rewards
+    SUCCESS // when the project has finished and success and investor could claim the rewards
 }
 
 enum InvestmentStatus {
