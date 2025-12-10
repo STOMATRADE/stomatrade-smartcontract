@@ -1,37 +1,38 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable as OZOwnable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {ProjectStorage} from "./utils/ProjectStorage.sol";
 import {FarmerStorage} from "./utils/FarmerStorage.sol";
 import {Event} from "./utils/Event.sol";
 import {Constant} from "./utils/Constant.sol";
 
-import "./utils/Errors.sol";
-import "./utils/Enum.sol";
+import {Errors} from "./utils/Errors.sol";
+import {ProjectStatus, InvestmentStatus} from "./utils/Enum.sol";
 
 contract Stomatrade is
     ERC721URIStorage,
     ReentrancyGuard,
-    Ownable,
+    OZOwnable,
     ProjectStorage,
     FarmerStorage,
     Event,
     Constant
 {
     using SafeERC20 for IERC20;
-    IERC20 public immutable idrx;
+    IERC20 public immutable IDRX;
 
     constructor(
         address idrxTokenAddress
-    ) ERC721("Stomatrade", "STMX") Ownable(msg.sender) {
+    ) ERC721("Stomatrade", "STMX") OZOwnable(msg.sender) {
         if (idrxTokenAddress == address(0)) revert Errors.ZeroAddress();
-        idrx = IERC20(idrxTokenAddress);
+        IDRX = IERC20(idrxTokenAddress);
     }
 
     function addFarmer(
@@ -120,7 +121,7 @@ contract Stomatrade is
 
     function finishProject(uint256 _idProject) external nonReentrant onlyOwner {
         (, , uint256 obligationAmount) = getAdminRequiredDeposit(_idProject);
-        idrx.safeTransferFrom(msg.sender, address(this), obligationAmount);
+        IDRX.safeTransferFrom(msg.sender, address(this), obligationAmount);
 
         Project storage p = projects[_idProject];
         p.status = ProjectStatus.SUCCESS;
@@ -157,7 +158,7 @@ contract Stomatrade is
             invested = freeToInvest;
         }
 
-        idrx.safeTransferFrom(msg.sender, address(this), invested);
+        IDRX.safeTransferFrom(msg.sender, address(this), invested);
         Investment storage userInvest = contribution[projectId][msg.sender];
 
         bool isExistingInvestor = (userInvest.investor == msg.sender);
@@ -243,7 +244,7 @@ contract Stomatrade is
             p.totalRaised = 0;
         }
 
-        idrx.safeTransfer(msg.sender, refundAmount);
+        IDRX.safeTransfer(msg.sender, refundAmount);
 
         emit Refunded(projectId, msg.sender, refundAmount);
     }
@@ -287,7 +288,7 @@ contract Stomatrade is
             p.totalRaised = 0;
         }
 
-        idrx.safeTransfer(msg.sender, totalReturn);
+        IDRX.safeTransfer(msg.sender, totalReturn);
         emit ProfitClaimed(projectId, msg.sender, totalReturn);
     }
 

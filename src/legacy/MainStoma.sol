@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable as OZOwnable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import "./ErrorStoma.sol";
+import {Errors} from "./ErrorStoma.sol";
 import {Event} from "./EventStoma.sol";
-import "./StorageStoma.sol";
-import "./EnumStoma.sol";
+import {Project, Investment} from "./StorageStoma.sol";
+import {ProjectStatus} from "./EnumStoma.sol";
 
-contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
+contract StomaTrade is ERC721URIStorage, ReentrancyGuard, OZOwnable, Event {
     using SafeERC20 for IERC20;
 
-    IERC20 public immutable idrx;
+    IERC20 public immutable IDRX;
     uint256 public nextProjectId = 1;
     uint256 public nextNftId = 1;
     uint256 public nextFarmerId = 1;
@@ -31,17 +32,22 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
 
     // MODIFIERS
     modifier onlyValidProject(uint256 _idProject) {
-        if (_idProject == 0 || _idProject >= nextProjectId)
-            revert Errors.InvalidProject();
+        _onlyValidProject(_idProject);
         _;
+    }
+
+    function _onlyValidProject(uint256 _idProject) internal view {
+        if (_idProject == 0 || _idProject >= nextProjectId) {
+            revert Errors.InvalidProject();
+        }
     }
 
     // CONSTRUCTOR
     constructor(
         address idrxTokenAddress
-    ) ERC721("CrowdFunding Stomatrade", "STM") Ownable(msg.sender) {
+    ) ERC721("CrowdFunding Stomatrade", "STM") OZOwnable(msg.sender) {
         if (idrxTokenAddress == address(0)) revert Errors.ZeroAddress();
-        idrx = IERC20(idrxTokenAddress);
+        IDRX = IERC20(idrxTokenAddress);
     }
 
     // PROJECT MANAGEMENT
@@ -118,7 +124,7 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
         if (p.totalRaised + _amount > p.maxCrowdFunding)
             revert Errors.MaxFundingExceeded();
 
-        idrx.safeTransferFrom(msg.sender, address(this), _amount);
+        IDRX.safeTransferFrom(msg.sender, address(this), _amount);
 
         p.totalRaised += _amount;
         contribution[_idProject][msg.sender] += _amount;
@@ -165,7 +171,7 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
 
         uint256 amount = p.totalRaised;
         if (amount > 0) {
-            idrx.safeTransfer(p.projectOwner, amount);
+            IDRX.safeTransfer(p.projectOwner, amount);
             emit WithDraw(_idProject, p.projectOwner, amount);
         }
     }
@@ -202,7 +208,7 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
         p.totalRaised -= _amount;
         totalInvestment[msg.sender] -= _amount;
 
-        idrx.safeTransfer(msg.sender, _amount);
+        IDRX.safeTransfer(msg.sender, _amount);
         emit Refunded(_idProject, msg.sender, _amount);
     }
 
@@ -212,7 +218,7 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
         uint256 _amount
     ) external onlyOwner onlyValidProject(_idProject) {
         if (_amount == 0) revert Errors.ZeroAmount();
-        idrx.safeTransferFrom(msg.sender, address(this), _amount);
+        IDRX.safeTransferFrom(msg.sender, address(this), _amount);
         profitPool[_idProject] += _amount;
         emit ProfitDeposited(_idProject, _amount);
     }
@@ -237,7 +243,7 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
         uint256 toClaim = entitled - already;
         claimedProfit[_idProject][msg.sender] = entitled;
 
-        idrx.safeTransfer(msg.sender, toClaim);
+        IDRX.safeTransfer(msg.sender, toClaim);
         emit ProfitClaimed(_idProject, msg.sender, toClaim);
     }
 
@@ -300,9 +306,9 @@ contract StomaTrade is ERC721URIStorage, ReentrancyGuard, Ownable, Event {
     }
 
     function getInvestmentByNftId(
-        uint256 _NftId
+        uint256 _nftId
     ) external view returns (Investment memory) {
-        if (_ownerOf(_NftId) == address(0)) revert Errors.InvalidProject();
-        return investmentsByTokenId[_NftId];
+        if (_ownerOf(_nftId) == address(0)) revert Errors.InvalidProject();
+        return investmentsByTokenId[_nftId];
     }
 }

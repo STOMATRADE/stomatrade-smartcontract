@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import "./Enum.sol";
+import {ProjectStatus, InvestmentStatus} from "./Enum.sol";
 
 contract ProjectStorage {
     uint256 public idProject = 1;
